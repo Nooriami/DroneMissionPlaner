@@ -1,0 +1,830 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Drone Mission Planner</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+</head>
+
+<body>
+
+<!-- Добавляем шапку -->    
+    <header>
+        <div class="logo">
+            <img src="logo1.svg" alt="Logo">
+        </div>
+        <div class="site-title">DRONE MISSION PLANNER</div>
+        <div class="buttons">
+            <input type="file" id="fileInput" accept=".txt" style="display: none">
+            <button onclick="document.getElementById('fileInput').click()">ОТКРЫТЬ</button>
+            <button onclick="exportWaypoints()">СОХРАНИТЬ</button>
+            <button onclick="downloadKML()">СОХРАНИТЬ KML</button>
+        </div>
+    </header>   
+
+    <main>
+        <aside id="left-panel">
+            <div id="altitude-settings">
+                <div class="altitude-input-group">
+                    <label for="defaultAltitude">ВЫСОТА ПО УМОЛЧАНИЮ:</label>
+                    <input type="number" id="defaultAltitude" value="100">
+                    <span>(МЕТРЫ)</span>
+                </div>
+            </div>
+
+            <div id="speed-settings">
+                <div class="altitude-input-group">
+                    <label for="defaultSpeed">СКОРОСТЬ ПО УМОЛЧАНИЮ:</label>
+                    <input type="number" id="defaultSpeed" value="5" step="0.1">
+                    <span>(М/СЕК)</span>
+                </div>
+            </div>
+
+            <div id="route-templates">
+                <div class="section-title">ШАБЛОНЫ МАРШРУТА</div>
+                <div class="template-buttons">
+                    <button class="template-btn" onclick="createCircleRoute()">КРУГ</button>
+                    <button class="template-btn" onclick="createRectangleRoute()">ОБЛАСТЬ</button>
+                </div>
+            </div>
+
+            <div id="route-editing">
+                <div class="section-title">РЕДАКТИРОВАНИЕ</div>
+                <div class="editing-content">
+                    <div id="editingFields" style="display: none;">
+                        <div class="point-title">ТОЧКА <span id="currentPointIndex">1</span></div>
+                        <div class="edit-field">
+                            <label>КОМАНДА:</label>
+                            <select id="editCommand" onchange="updateWaypointParam('command', this.value)">
+                                <option value="16">Путевая точка (16)</option>
+                                <option value="21">Приземление (21)</option>
+                                <option value="22">Взлёт (22)</option>
+                                <option value="20">Возврат домой (20)</option>
+                            </select>
+                        </div>
+                        <div class="edit-field">
+                            <label>ВЫСОТА:</label>
+                            <input type="number" id="editAlt" onchange="updateWaypointParam('alt', this.value)">
+                        </div>
+                        <div class="edit-field">
+                            <label>СКОРОСТЬ:</label>
+                            <input type="number" id="editSpeed" step="0.1" onchange="updateWaypointParam('speed', this.value)">
+                        </div>
+                        <div class="edit-field">
+                            <label>ШИРОТА:</label>
+                            <input type="number" id="editLat" step="0.0000001" onchange="updateWaypointParam('lat', this.value)">
+                        </div>
+                        <div class="edit-field">
+                            <label>ДОЛГОТА:</label>
+                            <input type="number" id="editLon" step="0.0000001" onchange="updateWaypointParam('lon', this.value)">
+                        </div>
+                        <div id="circleParams" style="display: none;">
+                            <div class="edit-field">
+                                <label>РАДИУС:</label>
+                                <input type="number" id="editRadius" onchange="updateCircleParams('radius', this.value)" min="1">
+                                <span class="units">(МЕТРЫ)</span>
+                            </div>
+                            <div class="edit-field">
+                                <label>КОЛИЧЕСТВО ВЕРШИН:</label>
+                                <input type="number" id="editVertices" onchange="updateCircleParams('vertices', this.value)" min="3" max="360">
+                            </div>
+                        </div>
+                    </div>
+                    <div id="noPointSelected" class="no-point-message">
+                        ВЫБЕРИТЕ ТОЧКУ ДЛЯ РЕДАКТИРОВАНИЯ
+                    </div>
+                </div>
+            </div>
+        </aside>
+        
+
+        <section id="content">
+            <!-- Сюда добавится основной контент -->
+            <div id="beige-area">
+                <div id="map"></div>
+                
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <div class="route-length-block" id="routeLengthBlock">
+                        <b>ДЛИНА МАРШРУТА:</b>
+                        <span id="routeLengthValue">0 км</span>
+                    </div>
+                    <button onclick="clearWaypoints()" class="clear-route-btn">ОЧИСТИТЬ МАРШРУТ</button>
+                </div>
+
+                <div class="route-points-block">
+                    <div class="route-title">ТОЧКИ МАРШРУТА</div>
+                    <div class="route-header hidden" id="routeHeader">
+                        <div class="header-item empty-header"></div>
+                        <div class="header-item">КОМАНДА</div>
+                        <div class="header-item">ВЫСОТА</div>
+                        <div class="header-item">СКОРОСТЬ</div>
+                        <div class="header-item">ШИРОТА</div>
+                        <div class="header-item">ДОЛГОТА</div>
+                        <div class="header-item"></div>
+                    </div>
+                    <div id="waypointList"></div>
+                </div>
+            </div>
+        </section>
+        
+    </main>
+    
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.0/Sortable.min.js"></script>
+    <script>
+       
+        const map = L.map('map', {attributionControl: false}).setView([43.1155, 131.8855], 10);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19
+        }).addTo(map);
+
+        let waypoints = [];
+        let markers = [];
+        let polyline = null;
+
+        const defaultCommand = 16;
+
+        const commandNames = {
+            16: "Путевая точка",
+            21: "Приземление",
+            22: "Взлёт",
+            20: "Возврат домой"
+        };
+
+        let isCreatingCircle = false;
+        let circleRadius = 100; // радиус в метрах
+        let defaultVertices = 8; // количество вершин по умолчанию
+        let circlePoints = []; // массив для хранения индексов точек круга
+        let centerPointIndex = -1; // индекс центральной точки
+
+        let currentEditingIndex = -1;
+
+        map.on('click', function(e) {
+            // Если создается круг, не добавляем новую точку
+            if (isCreatingCircle) return;
+
+            const lat = e.latlng.lat.toFixed(7);
+            const lon = e.latlng.lng.toFixed(7);
+            const alt = parseFloat(document.getElementById('defaultAltitude').value) || 100;
+            const speed = parseFloat(document.getElementById('defaultSpeed').value) || 5;
+            const index = waypoints.length;
+
+            const wp = { lat, lon, alt, speed, command: defaultCommand };
+            waypoints.push(wp);
+            const marker = createDraggableMarker(wp, index);
+            markers.push(marker);
+
+            // Показываем заголовки при добавлении первой точки
+            if (waypoints.length === 1) {
+                document.getElementById('routeHeader').classList.remove('hidden');
+            }
+
+            updateWaypointList();
+            redrawPolyline();
+        });
+
+        function createDraggableMarker(wp, index) {
+            const marker = L.marker([wp.lat, wp.lon], { 
+                draggable: true
+            }).addTo(map);
+            
+            marker.on('click', function() {
+                showPointDetails(index);
+            });
+
+            marker.on('dragend', function(e) {
+                const pos = e.target.getLatLng();
+                const newLat = pos.lat;
+                const newLon = pos.lng;
+                
+                // Если это центральная точка, обновляем все точки окружности
+                if (wp.isCenter) {
+                    wp.lat = newLat.toFixed(7);
+                    wp.lon = newLon.toFixed(7);
+                    
+                    // Обновляем координаты всех точек круга
+                    waypoints.forEach((point, i) => {
+                        if (point.isCirclePoint && point.centerIndex === index) {
+                            const radiusLat = circleRadius / 111111;
+                            const radiusLon = circleRadius / (111111 * Math.cos(newLat * Math.PI / 180));
+                            
+                            point.lat = (newLat + radiusLat * Math.sin(point.relativeAngle * Math.PI / 180)).toFixed(7);
+                            point.lon = (newLon + radiusLon * Math.cos(point.relativeAngle * Math.PI / 180)).toFixed(7);
+                            
+                            markers[i].setLatLng([point.lat, point.lon]);
+                        }
+                    });
+                } else if (wp.isCirclePoint) {
+                    // Если это точка окружности, не позволяем её перемещать
+                    marker.setLatLng([wp.lat, wp.lon]);
+                    return;
+                } else {
+                    // Если это обычная точка маршрута, разрешаем перемещение
+                    wp.lat = newLat.toFixed(7);
+                    wp.lon = newLon.toFixed(7);
+                }
+                
+                if (currentEditingIndex === index) {
+                    document.getElementById('editLat').value = wp.lat;
+                    document.getElementById('editLon').value = wp.lon;
+                }
+                
+                redrawPolyline();
+                updateWaypointList();
+            });
+
+            return marker;
+        }
+
+        function showPointDetails(index) {
+            currentEditingIndex = index;
+            const point = waypoints[index];
+            
+            document.getElementById('editingFields').style.display = 'block';
+            document.getElementById('noPointSelected').style.display = 'none';
+            
+            document.getElementById('currentPointIndex').textContent = index + 1;
+            document.getElementById('editCommand').value = point.command;
+            document.getElementById('editAlt').value = point.alt;
+            document.getElementById('editSpeed').value = point.speed;
+            document.getElementById('editLat').value = point.lat;
+            document.getElementById('editLon').value = point.lon;
+
+            // Показываем или скрываем параметры круга
+            const circleParams = document.getElementById('circleParams');
+            if (point.isCenter) {
+                circleParams.style.display = 'block';
+                document.getElementById('editRadius').value = circleRadius;
+                document.getElementById('editVertices').value = defaultVertices;
+            } else {
+                circleParams.style.display = 'none';
+            }
+        }
+
+        function clearEditingPanel() {
+            currentEditingIndex = -1;
+            document.getElementById('editingFields').style.display = 'none';
+            document.getElementById('noPointSelected').style.display = 'block';
+        }
+
+        function updateWaypointParam(param, value) {
+            if (currentEditingIndex === -1) return;
+            
+            const point = waypoints[currentEditingIndex];
+            if (param === 'command') {
+                point[param] = parseInt(value);
+            } else if (param === 'alt' || param === 'speed') {
+                point[param] = parseFloat(value);
+            } else if (param === 'lat' || param === 'lon') {
+                // Разрешаем изменение координат для центральной точки и обычных точек
+                if (point.isCirclePoint) {
+                    return;
+                }
+                point[param] = parseFloat(value).toFixed(7);
+                const marker = markers[currentEditingIndex];
+                marker.setLatLng([point.lat, point.lon]);
+                
+                // Если это центральная точка, обновляем координаты всех точек круга
+                if (point.isCenter) {
+                    waypoints.forEach((circlePoint, i) => {
+                        if (circlePoint.isCirclePoint && circlePoint.centerIndex === currentEditingIndex) {
+                            const radiusLat = circleRadius / 111111;
+                            const radiusLon = circleRadius / (111111 * Math.cos(parseFloat(point.lat) * Math.PI / 180));
+                            
+                            circlePoint.lat = (parseFloat(point.lat) + radiusLat * Math.sin(circlePoint.relativeAngle * Math.PI / 180)).toFixed(7);
+                            circlePoint.lon = (parseFloat(point.lon) + radiusLon * Math.cos(circlePoint.relativeAngle * Math.PI / 180)).toFixed(7);
+                            
+                            markers[i].setLatLng([circlePoint.lat, circlePoint.lon]);
+                        }
+                    });
+                }
+                
+                redrawPolyline();
+            }
+            updateWaypointList();
+        }
+
+        function updateCircleParams(param, value) {
+            if (currentEditingIndex === -1) return;
+            
+            const centerPoint = waypoints[currentEditingIndex];
+            if (!centerPoint.isCenter) return;
+
+            const newValue = parseInt(value);
+            if (param === 'radius') {
+                if (newValue < 1) return;
+                circleRadius = newValue;
+            } else if (param === 'vertices') {
+                if (newValue < 3 || newValue > 360) return;
+                defaultVertices = newValue;
+            }
+
+            // Удаляем старые точки круга
+            const oldPoints = waypoints.filter(wp => wp.isCirclePoint && wp.centerIndex === currentEditingIndex);
+            oldPoints.forEach(wp => {
+                const idx = waypoints.indexOf(wp);
+                if (idx !== -1) {
+                    map.removeLayer(markers[idx]);
+                    markers.splice(idx, 1);
+                    waypoints.splice(idx, 1);
+                }
+            });
+
+            // Создаем новые точки круга
+            const centerLat = parseFloat(centerPoint.lat);
+            const centerLon = parseFloat(centerPoint.lon);
+            const angleStep = 360 / defaultVertices;
+
+            for (let angle = 0; angle <= 360; angle += angleStep) {
+                const radiusLat = circleRadius / 111111;
+                const radiusLon = circleRadius / (111111 * Math.cos(centerLat * Math.PI / 180));
+
+                const lat = centerLat + radiusLat * Math.sin(angle * Math.PI / 180);
+                const lon = centerLon + radiusLon * Math.cos(angle * Math.PI / 180);
+
+                const wp = {
+                    lat: lat.toFixed(7),
+                    lon: lon.toFixed(7),
+                    alt: centerPoint.alt,
+                    command: 16,
+                    isCirclePoint: true,
+                    centerIndex: currentEditingIndex,
+                    relativeAngle: angle
+                };
+
+                waypoints.push(wp);
+                markers.push(createDraggableMarker(wp, waypoints.length - 1));
+            }
+
+            // Последней точке даем команду RTL
+            waypoints[waypoints.length - 1].command = 20;
+
+            updateWaypointList();
+            redrawPolyline();
+        }
+
+        function redrawPolyline() {
+            if (polyline) {
+                map.removeLayer(polyline);
+            }
+            if (waypoints.length > 1) {
+                const latlngs = waypoints.map(wp => [parseFloat(wp.lat), parseFloat(wp.lon)]);
+                polyline = L.polyline(latlngs, { color: 'blue', weight: 2 }).addTo(map);
+            }
+            updateRouteLength();
+        }
+
+        function redrawAll() {
+            markers.forEach(m => map.removeLayer(m));
+            markers = [];
+            waypoints.forEach((wp, i) => {
+                const marker = createDraggableMarker(wp, i);
+                markers.push(marker);
+            });
+            redrawPolyline();
+        }
+
+        function deleteWaypoint(index) {
+            map.removeLayer(markers[index]);
+            waypoints.splice(index, 1);
+            markers.splice(index, 1);
+            redrawAll();
+            updateWaypointList();
+            if (currentEditingIndex === index) {
+                clearEditingPanel();
+            }
+            // Скрываем заголовки если удалили последнюю точку
+            if (waypoints.length === 0) {
+                document.getElementById('routeHeader').classList.add('hidden');
+            }
+        }
+
+        function updateWaypointList() {
+            const list = document.getElementById('waypointList');
+            list.innerHTML = '';
+            waypoints.forEach((wp, i) => {
+                const row = document.createElement('div');
+                row.className = 'waypoint-row';
+                row.dataset.index = i;
+                row.onclick = () => showPointDetails(i);
+
+                // Добавляем три точки
+                const dots = document.createElement('div');
+                dots.className = 'waypoint-dots';
+                dots.title = 'Переместить';
+                for (let j = 0; j < 3; j++) {
+                    const dot = document.createElement('div');
+                    dot.className = 'dot';
+                    dots.appendChild(dot);
+                }
+                row.appendChild(dots);
+
+                // Номер точки
+                const numberDiv = document.createElement('div');
+                numberDiv.className = 'waypoint-number';
+                numberDiv.textContent = (i + 1);
+                row.appendChild(numberDiv);
+
+                // Разделитель
+                const sep1 = document.createElement('div');
+                sep1.className = 'vertical-separator';
+                row.appendChild(sep1);
+
+                // Команда
+                const commandCell = document.createElement('div');
+                commandCell.className = 'waypoint-cell';
+                commandCell.textContent = `${commandNames[wp.command] || "Неизвестная команда"} (${wp.command})`;
+                row.appendChild(commandCell);
+
+                // Разделитель
+                const sep2 = document.createElement('div');
+                sep2.className = 'vertical-separator';
+                row.appendChild(sep2);
+
+                // Высота
+                const altCell = document.createElement('div');
+                altCell.className = 'waypoint-cell';
+                altCell.textContent = wp.alt;
+                row.appendChild(altCell);
+
+                // Разделитель
+                const sep3 = document.createElement('div');
+                sep3.className = 'vertical-separator';
+                row.appendChild(sep3);
+
+                // Скорость
+                const speedCell = document.createElement('div');
+                speedCell.className = 'waypoint-cell';
+                speedCell.textContent = wp.speed; //|| document.getElementById('defaultSpeed').value; // Используем значение скорости из wp или значение по умолчанию
+                row.appendChild(speedCell);
+
+                // Разделитель
+                const sep4 = document.createElement('div');
+                sep4.className = 'vertical-separator';
+                row.appendChild(sep4);
+
+                // Широта
+                const latCell = document.createElement('div');
+                latCell.className = 'waypoint-cell';
+                latCell.textContent = wp.lat;
+                row.appendChild(latCell);
+
+                // Разделитель
+                const sep5 = document.createElement('div');
+                sep5.className = 'vertical-separator';
+                row.appendChild(sep5);
+
+                // Долгота
+                const lonCell = document.createElement('div');
+                lonCell.className = 'waypoint-cell';
+                lonCell.textContent = wp.lon;
+                row.appendChild(lonCell);
+
+                // Разделитель
+                const sep6 = document.createElement('div');
+                sep6.className = 'vertical-separator';
+                row.appendChild(sep6);
+
+                // Кнопка удаления
+                const deleteBtn = document.createElement('button');
+                deleteBtn.className = 'delete-button';
+                deleteBtn.innerHTML = '×';
+                deleteBtn.title = 'Удалить';
+                deleteBtn.onclick = (e) => {
+                    e.stopPropagation();
+                    deleteWaypoint(i);
+                };
+                row.appendChild(deleteBtn);
+
+                list.appendChild(row);
+            });
+            updateRouteLength();
+        }
+
+        new Sortable(waypointList, {
+        onEnd: function(evt) {
+            const oldIndex = evt.oldIndex;
+            const newIndex = evt.newIndex;
+            if (oldIndex === newIndex) return;
+            const movedWp = waypoints.splice(oldIndex, 1)[0];
+            const movedMarker = markers.splice(oldIndex, 1)[0];
+            waypoints.splice(newIndex, 0, movedWp);
+            markers.splice(newIndex, 0, movedMarker);
+            redrawAll();
+            redrawPolyline();
+            updateWaypointList();
+        }
+        });
+
+        function exportWaypoints() {
+            if (waypoints.length === 0) {
+                alert('Нет точек для сохранения');
+                return;
+            }
+
+            let output = "QGC WPL 110\n";
+            waypoints.forEach((wp, i) => {
+                output += `${i}\t0\t3\t${wp.command}\t0\t0\t0\t0\t${wp.lat}\t${wp.lon}\t${wp.alt}\t1\n`;
+            });
+
+            const blob = new Blob([output], { type: 'text/plain' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'waypoints.txt';
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            document.body.removeChild(a);
+        }
+
+        function clearWaypoints() {
+            markers.forEach(m => map.removeLayer(m));
+            if (polyline) map.removeLayer(polyline);
+            waypoints = [];
+            markers = [];
+            polyline = null;
+            updateWaypointList();
+            clearEditingPanel();
+            // Скрываем заголовки
+            document.getElementById('routeHeader').classList.add('hidden');
+            updateRouteLength();
+        }
+
+        function download(filename, text) {
+        const element = document.createElement('a');
+        element.setAttribute('href', 'data:text/plain;charset=utf-8,' + encodeURIComponent(text));
+        element.setAttribute('download', filename);
+        element.style.display = 'none';
+        document.body.appendChild(element);
+        element.click();
+        document.body.removeChild(element);
+        }
+
+        function downloadKML() {
+        let kml = `<?xml version="1.0" encoding="UTF-8"?>\n`;
+        kml += `<kml xmlns="http://www.opengis.net/kml/2.2">\n`;
+        kml += `  <Document>\n`;
+
+        waypoints.forEach((wp, i) => {
+            kml += `    <Placemark>\n`;
+            kml += `      <name>WP${i}</name>\n`;
+            kml += `      <description>Altitude: ${wp.alt}, Command: ${wp.command}</description>\n`;
+            kml += `      <Point><coordinates>${wp.lon},${wp.lat},${wp.alt}</coordinates></Point>\n`;
+            kml += `    </Placemark>\n`;
+        });
+
+        if (waypoints.length > 1) {
+            kml += `    <Placemark>\n`;
+            kml += `      <name>Path</name>\n`;
+            kml += `      <LineString>\n`;
+            kml += `        <tessellate>1</tessellate>\n`;
+            kml += `        <coordinates>\n`;
+            kml += waypoints.map(wp => `${wp.lon},${wp.lat},${wp.alt}`).join(' ');
+            kml += `\n        </coordinates>\n`;
+            kml += `      </LineString>\n`;
+            kml += `    </Placemark>\n`;
+        }
+
+        kml += `  </Document>\n`;
+        kml += `</kml>`;
+
+        download("waypoints.kml", kml);
+        }
+
+        function showStats() {
+        const n = waypoints.length;
+        if (n < 2) return alert('Недостаточно точек');
+
+        let totalDistance = 0;
+        for (let i = 1; i < n; i++) {
+            const lat1 = parseFloat(waypoints[i - 1].lat);
+            const lon1 = parseFloat(waypoints[i - 1].lon);
+            const lat2 = parseFloat(waypoints[i].lat);
+            const lon2 = parseFloat(waypoints[i].lon);
+            totalDistance += haversineDistance(lat1, lon1, lat2, lon2);
+        }
+
+        let totalAltitude = 0;
+        waypoints.forEach(wp => totalAltitude += parseFloat(wp.alt));
+        const avgAltitude = totalAltitude / n;
+
+        alert(`Всего точек: ${n}\nДлина маршрута: ${totalDistance.toFixed(2)} км\nСредняя высота: ${avgAltitude.toFixed(1)} м`);
+        }
+
+        function haversineDistance(lat1, lon1, lat2, lon2) {
+        const R = 6371;
+        const dLat = (lat2 - lat1) * Math.PI / 180;
+        const dLon = (lon2 - lon1) * Math.PI / 180;
+        const a =
+            Math.sin(dLat/2) * Math.sin(dLat/2) +
+            Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+            Math.sin(dLon/2) * Math.sin(dLon/2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+        return R * c;
+        }
+
+        function updateRouteLength() {
+            const n = waypoints.length;
+            let totalDistance = 0;
+            for (let i = 1; i < n; i++) {
+                const lat1 = parseFloat(waypoints[i - 1].lat);
+                const lon1 = parseFloat(waypoints[i - 1].lon);
+                const lat2 = parseFloat(waypoints[i].lat);
+                const lon2 = parseFloat(waypoints[i].lon);
+                totalDistance += haversineDistance(lat1, lon1, lat2, lon2);
+            }
+            document.getElementById('routeLengthValue').textContent = n > 1 ? totalDistance.toFixed(3) + ' км' : '0 км';
+        }
+
+        document.getElementById('fileInput').addEventListener('change', function(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const lines = e.target.result.split('\n');
+                if (lines[0].trim() !== 'QGC WPL 110') {
+                    alert('Неверный формат файла');
+                    return;
+                }
+
+                clearWaypoints();
+                
+                lines.slice(1).forEach(line => {
+                    const parts = line.trim().split('\t');
+                    if (parts.length < 12) return;
+                    
+                    const lat = parseFloat(parts[8]);
+                    const lon = parseFloat(parts[9]);
+                    const alt = parseFloat(parts[10]);
+                    const command = parseInt(parts[3]);
+
+                    if (isNaN(lat) || isNaN(lon) || isNaN(alt) || isNaN(command)) return;
+
+                    const wp = { 
+                        lat: lat.toFixed(7), 
+                        lon: lon.toFixed(7), 
+                        alt, 
+                        command 
+                    };
+                    waypoints.push(wp);
+                    const marker = createDraggableMarker(wp, waypoints.length - 1);
+                    markers.push(marker);
+                });
+
+                if (waypoints.length > 0) {
+                    redrawPolyline();
+                    updateWaypointList();
+                    const bounds = L.latLngBounds(waypoints.map(wp => [parseFloat(wp.lat), parseFloat(wp.lon)]));
+                    map.fitBounds(bounds);
+                }
+            };
+            reader.readAsText(file);
+        });
+
+        function createCircleRoute() {
+            isCreatingCircle = true;
+            alert('Кликните на карту, чтобы выбрать центр круга');
+
+            map.once('click', function(e) {
+                const centerLat = e.latlng.lat;
+                const centerLon = e.latlng.lng;
+                const defaultAlt = parseFloat(document.getElementById('defaultAltitude').value) || 100;
+                const defaultSpeed = parseFloat(document.getElementById('defaultSpeed').value) || 5; // Добавляем скорость по умолчанию
+
+                const centerPoint = {
+                    lat: centerLat.toFixed(7),
+                    lon: centerLon.toFixed(7),
+                    alt: defaultAlt,
+                    speed: defaultSpeed,
+                    command: 22,
+                    isCenter: true
+                };
+                
+                waypoints.push(centerPoint);
+                const currentCenterIndex = waypoints.length - 1;
+                markers.push(createDraggableMarker(centerPoint, waypoints.length - 1));
+
+                const angleStep = 360 / defaultVertices;
+                for (let angle = 0; angle <= 360; angle += angleStep) {
+                    const radiusLat = circleRadius / 111111;
+                    const radiusLon = circleRadius / (111111 * Math.cos(centerLat * Math.PI / 180));
+
+                    const lat = centerLat + radiusLat * Math.sin(angle * Math.PI / 180);
+                    const lon = centerLon + radiusLon * Math.cos(angle * Math.PI / 180);
+
+                    const wp = {
+                        lat: lat.toFixed(7),
+                        lon: lon.toFixed(7),
+                        alt: defaultAlt,
+                        speed: defaultSpeed,
+                        command: 16,
+                        isCirclePoint: true,
+                        centerIndex: currentCenterIndex,
+                        relativeAngle: angle
+                    };
+
+                    waypoints.push(wp);
+                    markers.push(createDraggableMarker(wp, waypoints.length - 1));
+                }
+
+                waypoints[waypoints.length - 1].command = 20;
+
+                updateWaypointList();
+                redrawPolyline();
+                isCreatingCircle = false;
+
+                const bounds = L.latLngBounds(waypoints.map(wp => [parseFloat(wp.lat), parseFloat(wp.lon)]));
+                map.fitBounds(bounds, { padding: [50, 50] });
+            });
+        }
+
+        function createRectangleRoute() {
+            alert('Кликните четыре раза на карту по углам области (по часовой стрелке или против)');
+            let clickCount = 0;
+            let corners = [];
+            let tempPoly = null;
+            let cornerMarkers = [];
+            let innerRectLayer = null;
+
+            function onMapClick(e) {
+                corners.push(e.latlng);
+                clickCount++;
+                if (tempPoly) map.removeLayer(tempPoly);
+                tempPoly = L.polygon(corners, {color: '#6783A9', weight: 2, dashArray: '5,5', fill: false}).addTo(map);
+                if (clickCount === 4) {
+                    map.off('click', onMapClick);
+                    if (tempPoly) map.removeLayer(tempPoly);
+                    createDraggableQuadrilateral(corners);
+                }
+            }
+            map.on('click', onMapClick);
+
+            function createDraggableQuadrilateral(corners) {
+                // Рисуем четырёхугольник один раз
+                let polyLayer = L.polygon(corners, {color: '#6783A9', weight: 2, dashArray: '5,5', fill: false}).addTo(map);
+                // Добавляем 4 draggable маркера только один раз
+                cornerMarkers = [];
+                for (let i = 0; i < 4; i++) {
+                    let marker = L.marker(corners[i], {draggable: true, icon: L.divIcon({className: 'my-div-icon', iconSize: [18, 18], html: '<div style="width:16px;height:16px;background:#fff;border:2px solid #6783A9;border-radius:50%"></div>'})}).addTo(map);
+                    marker.on('drag', updateQuadrilateral);
+                    cornerMarkers.push(marker);
+                }
+                updateQuadrilateral();
+                function updateQuadrilateral() {
+                    let newCorners = cornerMarkers.map(m => m.getLatLng());
+                    map.removeLayer(polyLayer);
+                    polyLayer = L.polygon(newCorners, {color: '#6783A9', weight: 2, dashArray: '5,5', fill: false}).addTo(map);
+                    // Перестраиваем змейку
+                    buildSnakeInQuad(newCorners);
+                }
+            }
+        }
+
+        function buildSnakeInQuad(corners) {
+            clearWaypoints();
+            const cols = 6; // 5 промежутков
+            const rows = 6; // количество точек по высоте
+            const alt = parseFloat(document.getElementById('defaultAltitude').value) || 100;
+            // Верхняя и нижняя грань для интерполяции
+            let topEdge = [];
+            let bottomEdge = [];
+            for (let i = 0; i < cols; i++) {
+                let t = i / (cols - 1);
+                let topLat = corners[0].lat + t * (corners[1].lat - corners[0].lat);
+                let topLng = corners[0].lng + t * (corners[1].lng - corners[0].lng);
+                let botLat = corners[3].lat + t * (corners[2].lat - corners[3].lat);
+                let botLng = corners[3].lng + t * (corners[2].lng - corners[3].lng);
+                topEdge.push({lat: topLat, lng: topLng});
+                bottomEdge.push({lat: botLat, lng: botLng});
+            }
+            for (let col = 0; col < cols; col++) {
+                let line = [];
+                for (let row = 0; row < rows; row++) {
+                    let s = row / (rows - 1);
+                    let lat = topEdge[col].lat + s * (bottomEdge[col].lat - topEdge[col].lat);
+                    let lng = topEdge[col].lng + s * (bottomEdge[col].lng - topEdge[col].lng);
+                    line.push({lat: lat.toFixed(7), lon: lng.toFixed(7), alt, command: 16});
+                }
+                if (col % 2 === 1) line.reverse();
+                line.forEach(wp => {
+                    waypoints.push(wp);
+                    // Создаём маркер как недвигаемый
+                    const marker = L.marker([wp.lat, wp.lon], {draggable: false}).addTo(map);
+                    markers.push(marker);
+                });
+            }
+            redrawPolyline();
+            updateWaypointList();
+        }
+
+        // Вызвать при загрузке страницы
+        updateRouteLength();
+
+    </script>
+</body>
+
+</html>
